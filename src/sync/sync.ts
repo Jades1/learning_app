@@ -217,6 +217,18 @@ function syncNow(): Promise<void> {
   return chain;
 }
 
+/** Manual "Sync now": clear the push watermark so EVERY local row re-uploads, then
+ *  pull. Guarantees the cloud has a complete copy — the recovery for any row that a
+ *  prior push skipped. Cheap at single-user scale (a few hundred tiny rows). */
+export async function resyncAll(): Promise<void> {
+  try {
+    localStorage.removeItem(WM_KEY);
+  } catch {
+    /* ignore */
+  }
+  await syncNow();
+}
+
 // Debounced push after local writes (~4s of quiet), per the design cadence.
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
 function schedulePush() {

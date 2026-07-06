@@ -2,7 +2,7 @@
 // small opt-in control: signed-out shows "Sign in to sync"; signed-in shows a
 // live status dot and a menu to sign out.
 import { useState } from 'react';
-import { useSyncStore, type SyncStatus } from './sync';
+import { useSyncStore, resyncAll, type SyncStatus } from './sync';
 
 const DOT: Record<SyncStatus, { cls: string; text: string; title: string }> = {
   signedOut: { cls: 'off', text: 'Sign in to sync', title: 'Sync is off — your data is only in this browser' },
@@ -54,6 +54,15 @@ export function SyncChip() {
             <div className="sync-menu__meta">Last synced {new Date(lastSyncedAt).toLocaleTimeString()}</div>
           )}
           {error && <div className="sync-menu__err">{error}</div>}
+          <button
+            onClick={() => {
+              setMenu(false);
+              void resyncAll();
+            }}
+            title="Re-upload everything and pull — guarantees this device and the cloud match"
+          >
+            Sync now (full)
+          </button>
           <button
             onClick={() => {
               setMenu(false);
