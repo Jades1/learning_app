@@ -187,9 +187,13 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 
   reloadFromDb: async () => {
-    const graph = get().graph ?? (await db.graphs.orderBy('createdAt').first()) ?? null;
+    // Always resolve to the single canonical graph (earliest createdAt) — never a
+    // sticky in-memory one. This is what makes a device converge on the real graph
+    // after a sync pull brings it down, instead of staying on a locally-forked
+    // duplicate it happened to create first. (MVP is single-graph by design.)
+    const graph = (await db.graphs.orderBy('createdAt').first()) ?? null;
     if (!graph) {
-      set({ nodes: [], edges: [], cards: [] });
+      set({ graph: null, nodes: [], edges: [], cards: [] });
       return;
     }
     const [nodes, edges, cards] = await Promise.all([
