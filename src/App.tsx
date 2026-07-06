@@ -12,6 +12,8 @@ import {
   type Backup,
 } from './db/backup';
 import { EXPORT_NUDGE_DAYS } from './review/config';
+import { initSync } from './sync/sync';
+import { SyncChip } from './sync/SyncChip';
 
 export default function App() {
   const loaded = useStore((s) => s.loaded);
@@ -34,6 +36,7 @@ export default function App() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    initSync(); // must run before init() so it can register remote.firstPull
     void init();
     void requestPersistence().then(setPersisted);
   }, [init]);
@@ -106,6 +109,7 @@ export default function App() {
           <button onClick={() => setShowStats(true)}>Stats</button>
           <button onClick={() => void onExport()}>Export</button>
           <button onClick={() => fileInput.current?.click()}>Import</button>
+          <SyncChip />
           <input
             ref={fileInput}
             type="file"

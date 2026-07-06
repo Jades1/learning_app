@@ -1,0 +1,24 @@
+name: Supabase keep-alive
+
+# Free-tier Supabase projects auto-pause after ~1 week of inactivity (Supabase
+# then removes the DNS entry and the app fails with a network error until it's
+# restored). A weekly query keeps the SHARED project awake for both this app and
+# budget_app. The publishable key is public by design; the query returns 0 rows
+# under RLS (no auth) but still counts as project activity.
+on:
+  schedule:
+    - cron: '17 8 * * 1' # Mondays 08:17 UTC
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query REST endpoint to register activity
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            "https://mzzdijjofzajbjmttcrl.supabase.co/rest/v1/learning_graphs?select=id&limit=1" \
+            -H "apikey: sb_publishable_mC6t3LMVt1vH40wHKSYFYA_hbI4CDYR")
+          echo "REST responded $code"
+          # 2xx = awake and reachable. Anything else fails the run so it's visible.
+          [ "$code" -ge 200 ] && [ "$code" -lt 300 ]

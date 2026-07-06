@@ -69,8 +69,9 @@ export function downloadBackup(backup: Backup): void {
   markExported(backup.exportedAt);
 }
 
-/** Revive Date fields that JSON serialization flattened to strings. */
-function reviveCard(card: Card): Card {
+/** Revive Date fields that JSON serialization flattened to strings. Shared with the
+ *  sync engine (cloud rows arrive as ISO strings just like a backup file does). */
+export function reviveCard(card: Card): Card {
   const f = card.fsrs as unknown as Record<string, unknown>;
   return {
     ...card,

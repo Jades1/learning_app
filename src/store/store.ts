@@ -22,8 +22,18 @@ import {
 } from '../review/config';
 import { reconDegree } from '../review/reconstruction';
 import { SEED_EDGES, SEED_NODES, SEED_TITLE, seedPosition } from '../seed';
+import type { Tombstone } from '../db/db';
+import { remote } from '../sync/remoteFlag';
 
 const uid = () => crypto.randomUUID();
+
+/** Build a soft-delete record (see db.ts Tombstone). */
+const tomb = (table: Tombstone['table'], id: string): Tombstone => ({
+  key: `${table}:${id}`,
+  table,
+  id,
+  deletedAt: Date.now(),
+});
 
 // Dedupe concurrent init() calls (React StrictMode double-invokes effects in dev) so we
 // never create two graphs and then load the wrong one after a reload.
@@ -154,6 +164,13 @@ export const useStore = create<StoreState>((set, get) => ({
     initInFlight = (async () => {
       let graph = (await db.graphs.orderBy('createdAt').first()) ?? null;
       if (!graph) {
+        // On a freshly signed-in device, wait for the first cloud pull so we adopt
+        // the existing cloud graph instead of forking a new empty one. Resolves
+        // immediately when signed out or sync is uninitialised.
+        await remote.firstPull;
+        graph = (await db.graphs.orderBy('createdAt').first()) ?? null;
+      }
+      if (!graph) {
         graph = { id: uid(), title: SEED_TITLE, createdAt: Date.now() };
         await db.graphs.add(graph);
       }
@@ -275,10 +292,18 @@ export const useStore = create<StoreState>((set, get) => ({
     if (!node) return;
     const incidentEdges = st.edges.filter((e) => e.source === id || e.target === id);
     const cards = st.cards.filter((c) => c.nodeId === id);
-    await db.transaction('rw', db.nodes, db.edges, db.cards, async () => {
+    // Tombstones (same txn) so the delete propagates to other devices; a pure-union
+    // pull must never infer a delete from a row's absence.
+    const tombs = [
+      tomb('nodes', id),
+      ...incidentEdges.map((e) => tomb('edges', e.id)),
+      ...cards.map((c) => tomb('cards', c.id)),
+    ];
+    await db.transaction('rw', db.nodes, db.edges, db.cards, db.tombstones, async () => {
       await db.nodes.delete(id);
       await db.edges.bulkDelete(incidentEdges.map((e) => e.id));
       await db.cards.bulkDelete(cards.map((c) => c.id));
+      await db.tombstones.bulkPut(tombs);
       // ReviewLogs are intentionally KEPT — the log is the product (R2).
     });
     set((s) => ({
@@ -312,8 +337,11 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 
   deleteEdge: async (id) => {
-    await db.edges.delete(id);
     const edge = get().edges.find((e) => e.id === id);
+    await db.transaction('rw', db.edges, db.tombstones, async () => {
+      await db.edges.delete(id);
+      await db.tombstones.put(tomb('edges', id));
+    });
     set((s) => ({
       edges: s.edges.filter((e) => e.id !== id),
       lastDeleted: edge
@@ -353,13 +381,24 @@ export const useStore = create<StoreState>((set, get) => ({
     const snap = get().lastDeleted;
     if (!snap) return;
     if (snap.kind === 'node' && snap.node) {
-      await db.transaction('rw', db.nodes, db.edges, db.cards, async () => {
+      const keys = [
+        `nodes:${snap.node.id}`,
+        ...(snap.edges ?? []).map((e) => `edges:${e.id}`),
+        ...(snap.cards ?? []).map((c) => `cards:${c.id}`),
+      ];
+      await db.transaction('rw', db.nodes, db.edges, db.cards, db.tombstones, async () => {
         await db.nodes.add(snap.node!);
         if (snap.edges?.length) await db.edges.bulkAdd(snap.edges);
         if (snap.cards?.length) await db.cards.bulkAdd(snap.cards);
+        // Clear the tombstones; the re-added rows get a fresh updatedAt (via the Dexie
+        // hook) that outranks the tombstone, so LWW resurrects them on every device.
+        await db.tombstones.bulkDelete(keys);
       });
     } else if (snap.kind === 'edge' && snap.edge) {
-      await db.edges.add(snap.edge);
+      await db.transaction('rw', db.edges, db.tombstones, async () => {
+        await db.edges.add(snap.edge!);
+        await db.tombstones.delete(`edges:${snap.edge!.id}`);
+      });
     }
     set({ lastDeleted: null });
     await get().reloadFromDb();

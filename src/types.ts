@@ -2,6 +2,16 @@
 // FSRS scheduling state is stored verbatim as a ts-fsrs Card on each Card row.
 import type { Card as FsrsCard } from 'ts-fsrs';
 
+/**
+ * Sync metadata carried by every persisted row. Stamped by the Dexie hooks in
+ * db.ts (local writes) or by a pulled cloud row's timestamp. Optional so it never
+ * affects study/generation logic — the sync layer is the only reader.
+ */
+export interface Synced {
+  /** ms epoch of the last local edit (or the cloud row's timestamp on pull). */
+  updatedAt?: number;
+}
+
 export type InputMode = 'typed' | 'self-attempt';
 export type CardType = 'body' | 'connections';
 export type Outcome = 'success' | 'revealed' | 'fail';
@@ -11,14 +21,14 @@ export type Grade = 'Again' | 'Hard' | 'Good' | 'Easy';
 export type NodeColor = 'straw' | 'sage' | 'sky' | 'lilac' | 'blush' | 'sand';
 
 /** A study space. MVP: one graph, "Learning Claude". */
-export interface Graph {
+export interface Graph extends Synced {
   id: string;
   title: string;
   createdAt: number;
 }
 
 /** An idea. `label` is the always-visible prompt; `body` is what you recall. */
-export interface GNode {
+export interface GNode extends Synced {
   id: string;
   graphId: string;
   label: string;
@@ -32,7 +42,7 @@ export interface GNode {
 }
 
 /** A labeled relationship between two nodes. */
-export interface GEdge {
+export interface GEdge extends Synced {
   id: string;
   graphId: string;
   source: string;
@@ -45,7 +55,7 @@ export interface GEdge {
  * `body` (recall the hidden body) and `connections` (reconstruct its 1-hop
  * neighborhood — DEFERRED in the spine but modeled here). Each enabled per node.
  */
-export interface Card {
+export interface Card extends Synced {
   id: string;
   nodeId: string;
   graphId: string;
@@ -70,7 +80,7 @@ export interface BlankResult {
  * from the derived FSRS rating, so the grade() mapping can be revised and history
  * re-graded later without data loss.
  */
-export interface ReviewLog {
+export interface ReviewLog extends Synced {
   id: string;
   cardId: string;
   nodeId: string;

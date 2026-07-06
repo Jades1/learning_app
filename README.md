@@ -6,10 +6,11 @@ is the study surface: due nodes light up, you recall or rebuild them, and the ap
 only as much scaffolding as you need before scheduling the next review (FSRS). Designed
 around Robert Bjork's principles of durable learning.
 
-> **Status: v1 running (offline).** Built: graph editor, node-card review with a mechanical
+> **Status: v1 running.** Built: graph editor, node-card review with a mechanical
 > scaffolding ladder, **neighborhood reconstruction** (fill-the-blank), deterministic
-> grading, FSRS scheduling, a progress/stats view, and Dexie persistence with JSON export +
-> backup nudges. Fully offline — no server, no account, no AI in the loop.
+> grading, FSRS scheduling, a progress/stats view, Dexie persistence with JSON export +
+> backup nudges, and **optional cloud sync** across devices (Supabase). Works fully offline
+> and signed-out — sync is opt-in and never gates the app; no AI in the loop.
 >
 > **New here?** Read `USER-GUIDE.md` — it explains how to use the app *and why each feature
 > is built the way it is* (the learning science). See also `DECISIONS.md` for rationale,
@@ -28,8 +29,9 @@ npm run test:e2e  # headless Playwright smoke test (boot → seed → reload →
 ## Stack
 
 React + Vite + TypeScript · React Flow (`@xyflow/react`, canvas) · `ts-fsrs` (scheduler) ·
-Dexie/IndexedDB (local-first storage) · Zustand (UI state). v1 is **fully offline** — no
-server, no account, no AI in the loop.
+Dexie/IndexedDB (local-first storage) · Zustand (UI state) · Supabase (optional cloud sync).
+**Local-first**: the app runs entirely offline against IndexedDB; cloud sync is an opt-in
+layer on top. No AI in the loop.
 
 ## Features
 
@@ -45,6 +47,13 @@ server, no account, no AI in the loop.
 - **JSON export / import** — one-click backup of everything (the review log *is* the
   product), and restore from a backup file. Schema is versioned from day one. A backup
   reminder nudges you if it's been a while (or you've never exported).
+- **Optional cloud sync (Supabase)** — sign in from the toolbar to sync your graph, cards,
+  and full review history across devices/browsers. Opt-in and non-blocking: the app stays
+  fully usable offline and signed-out. Sync is a persistence layer *below* the study loop —
+  it never changes how reconstruction or grading work. Correctness-first design: local edits
+  push before remote pulls, pulls are a pure union (never delete on absence), deletes
+  propagate via soft-delete tombstones, and FSRS schedule dates survive the round-trip.
+  Details in `SUPABASE-DESIGN.md`; one-time setup SQL in `supabase/setup.sql`.
 - **Progress / stats view** — a read-only window on the review log: due count, reviews
   today and all-time, retention, the New/Learning/Review card breakdown, all-time rating
   mix, storage used, and last-backup age.

@@ -12,6 +12,7 @@
     "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.0",
     "@xyflow/react": "^12.11.1",
     "dexie": "^4.4.4",
     "react": "^18.3.1",
