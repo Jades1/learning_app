@@ -122,3 +122,68 @@ export async function importBackup(backup: Backup): Promise<Record<string, numbe
     reviewLogs: reviewLogs.length,
   };
 }
+
+/**
+ * Import a backup's contents as a NEW file, leaving existing files untouched. Every row gets a
+ * FRESH id (with all cross-references remapped), so an import can never collide with existing
+ * rows — and, crucially for sync, can never be silently re-killed by a cloud tombstone left
+ * over from a previously-deleted file with the same ids. Returns the new (primary) graph id.
+ */
+export async function importIntoNewFile(backup: Backup): Promise<string> {
+  if (!backup || backup.app !== 'learning_app' || !backup.data) {
+    throw new Error('Not a learning_app backup file.');
+  }
+  if (backup.schema > SCHEMA_VERSION) {
+    throw new Error(
+      `Backup schema v${backup.schema} is newer than this app (v${SCHEMA_VERSION}). Update the app first.`,
+    );
+  }
+  const { graphs, nodes, edges, cards, reviewLogs } = backup.data;
+
+  const gmap = new Map<string, string>();
+  const nmap = new Map<string, string>();
+  const cmap = new Map<string, string>();
+  const remap = (map: Map<string, string>, oldId: string): string => {
+    let v = map.get(oldId);
+    if (!v) {
+      v = crypto.randomUUID();
+      map.set(oldId, v);
+    }
+    return v;
+  };
+
+  // Order matters: graphs → nodes → cards populate the maps that edges/logs reference.
+  const newGraphs: Graph[] = graphs.map((g) => ({ ...g, id: remap(gmap, g.id) }));
+  const newNodes: GNode[] = nodes.map((n) => ({
+    ...n,
+    id: remap(nmap, n.id),
+    graphId: remap(gmap, n.graphId),
+  }));
+  const newCards: Card[] = cards.map((c) =>
+    reviveCard({ ...c, id: remap(cmap, c.id), nodeId: remap(nmap, c.nodeId), graphId: remap(gmap, c.graphId) }),
+  );
+  const newEdges: GEdge[] = edges.map((e) => ({
+    ...e,
+    id: crypto.randomUUID(),
+    graphId: remap(gmap, e.graphId),
+    source: remap(nmap, e.source),
+    target: remap(nmap, e.target),
+  }));
+  const newLogs: ReviewLog[] = reviewLogs.map((l) => ({
+    ...l,
+    id: crypto.randomUUID(),
+    cardId: remap(cmap, l.cardId),
+    nodeId: remap(nmap, l.nodeId),
+    graphId: remap(gmap, l.graphId),
+  }));
+
+  await db.transaction('rw', db.graphs, db.nodes, db.edges, db.cards, db.reviewLogs, async () => {
+    await db.graphs.bulkAdd(newGraphs);
+    await db.nodes.bulkAdd(newNodes);
+    await db.cards.bulkAdd(newCards);
+    await db.edges.bulkAdd(newEdges);
+    await db.reviewLogs.bulkAdd(newLogs);
+  });
+
+  return newGraphs[0]?.id ?? '';
+}

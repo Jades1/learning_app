@@ -14,11 +14,11 @@ import {
 import { EXPORT_NUDGE_DAYS } from './review/config';
 import { initSync } from './sync/sync';
 import { SyncChip } from './sync/SyncChip';
+import { FilePicker } from './files/FilePicker';
 
 export default function App() {
   const loaded = useStore((s) => s.loaded);
   const init = useStore((s) => s.init);
-  const graph = useStore((s) => s.graph);
   const nodes = useStore((s) => s.nodes);
   const mode = useStore((s) => s.mode);
   const startStudy = useStore((s) => s.startStudy);
@@ -65,6 +65,12 @@ export default function App() {
   const showExportNudge = nodes.length > 0 && staleExport;
 
   const onImportFile = async (file: File) => {
+    if (
+      !window.confirm(
+        'Restore all: this REPLACES every file with the backup’s contents. To add a backup as a separate file instead, use the file menu’s “Import backup into new file”. Continue?',
+      )
+    )
+      return;
     try {
       const backup = JSON.parse(await file.text()) as Backup;
       const counts = await importBackup(backup);
@@ -83,7 +89,7 @@ export default function App() {
     <div className="app">
       <header className="toolbar">
         <div className="toolbar__left">
-          <span className="toolbar__title">{graph?.title ?? 'learning_app'}</span>
+          <FilePicker />
           <div className="mode-toggle">
             <button
               className={mode === 'build' ? 'active' : ''}
@@ -108,7 +114,9 @@ export default function App() {
           )}
           <button onClick={() => setShowStats(true)}>Stats</button>
           <button onClick={() => void onExport()}>Export</button>
-          <button onClick={() => fileInput.current?.click()}>Import</button>
+          <button onClick={() => fileInput.current?.click()} title="Replaces ALL files with a backup">
+            Restore all
+          </button>
           <SyncChip />
           <input
             ref={fileInput}

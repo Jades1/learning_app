@@ -35,6 +35,13 @@ layer on top. No AI in the loop.
 
 ## Features
 
+- **Multiple files (separate study spaces)** — like Scapple files: each "file" is its own
+  canvas *and* its own review queue, and you study one file at a time. A toolbar switcher lets
+  you **create** (blank canvas), **switch**, **rename**, and **delete** files, plus **import a
+  backup as a new file** (with fresh IDs, so it's sync-safe). Your existing graph becomes your
+  first file automatically. Per-file scoping runs deep — due counts, the new-cards/day cap, and
+  the Stats panel are all scoped to the active file; deleting a file propagates the delete
+  across your synced devices (its review history is kept).
 - **Spatial graph editor (Scapple-like feel)** — double-click to add a node; **drag a node
   onto another to connect** (the target lights up); **single-click selects, double-click or
   just type to edit**; **background click-drag marquee-selects**; arrow-key nudge, ⌘/Ctrl+Return

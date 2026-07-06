@@ -35,6 +35,50 @@ const tomb = (table: Tombstone['table'], id: string): Tombstone => ({
   deletedAt: Date.now(),
 });
 
+// The active file (graph) id — per-device UI state, NEVER synced. Written ONLY by explicit
+// user actions (create/switch/delete). reloadFromDb's *fallback* resolution must not persist,
+// or a sync-triggered reload mid-pull could permanently hijack the selection.
+const SELECTED_KEY = 'learning_app:selectedGraphId';
+const readSelectedId = (): string | null => {
+  try {
+    return localStorage.getItem(SELECTED_KEY);
+  } catch {
+    return null;
+  }
+};
+const writeSelectedId = (id: string): void => {
+  try {
+    localStorage.setItem(SELECTED_KEY, id);
+  } catch {
+    /* localStorage unavailable — non-fatal */
+  }
+};
+
+/** Default name for a new file: the lowest "File N" (N≥2) not already in use. File 1 keeps
+ *  its own title (e.g. the seed's "Learning Claude"), so new files start numbering at 2. */
+const nextFileName = (graphs: Graph[]): string => {
+  const used = new Set(graphs.map((g) => g.title));
+  let n = 2;
+  while (used.has(`File ${n}`)) n++;
+  return `File ${n}`;
+};
+
+/** Per-file today-counters (new-cards/day cap + same-day sibling bury), rebuilt from the log. */
+async function todayCounters(
+  graphId: string,
+): Promise<{ newIntroducedToday: number; reviewedTodayNodeIds: Set<string> }> {
+  const dayStart = startOfAnkiDay(new Date(), ROLLOVER_HOUR).getTime();
+  const logs = await db.reviewLogs
+    .where('graphId')
+    .equals(graphId)
+    .and((l) => l.ts >= dayStart)
+    .toArray();
+  return {
+    newIntroducedToday: logs.filter((l) => l.wasNew).length,
+    reviewedTodayNodeIds: new Set(logs.map((l) => l.nodeId)),
+  };
+}
+
 // Dedupe concurrent init() calls (React StrictMode double-invokes effects in dev) so we
 // never create two graphs and then load the wrong one after a reload.
 let initInFlight: Promise<void> | null = null;
@@ -74,7 +118,8 @@ export interface ReviewSignals extends GradeSignals {
 
 interface StoreState {
   loaded: boolean;
-  graph: Graph | null;
+  graph: Graph | null; // the active file
+  graphs: Graph[]; // all files, ordered by createdAt (for the switcher)
   nodes: GNode[];
   edges: GEdge[];
   cards: Card[];
@@ -103,6 +148,12 @@ interface StoreState {
   init: () => Promise<void>;
   loadSeed: () => Promise<void>;
   reloadFromDb: () => Promise<void>;
+
+  // --- files (each file = one graph = its own canvas + review queue) ---
+  createFile: (title?: string) => Promise<void>;
+  switchFile: (id: string) => Promise<void>;
+  renameFile: (id: string, title: string) => Promise<void>;
+  deleteFile: (id: string) => Promise<void>;
 
   // --- build mutations (all persist) ---
   addNode: (x: number, y: number) => Promise<string>;
@@ -141,6 +192,7 @@ interface StoreState {
 export const useStore = create<StoreState>((set, get) => ({
   loaded: false,
   graph: null,
+  graphs: [],
   nodes: [],
   edges: [],
   cards: [],
@@ -162,38 +214,41 @@ export const useStore = create<StoreState>((set, get) => ({
   init: async () => {
     if (initInFlight) return initInFlight;
     initInFlight = (async () => {
-      let graph = (await db.graphs.orderBy('createdAt').first()) ?? null;
-      if (!graph) {
-        // On a freshly signed-in device, wait for the first cloud pull so we adopt
-        // the existing cloud graph instead of forking a new empty one. Resolves
-        // immediately when signed out or sync is uninitialised.
+      let count = await db.graphs.count();
+      if (count === 0) {
+        // On a freshly signed-in device, wait for the first cloud pull so we adopt the
+        // existing cloud file(s) instead of forking a new empty one. Resolves immediately
+        // when signed out or sync is uninitialised.
         await remote.firstPull;
-        graph = (await db.graphs.orderBy('createdAt').first()) ?? null;
+        count = await db.graphs.count();
       }
-      if (!graph) {
-        graph = { id: uid(), title: SEED_TITLE, createdAt: Date.now() };
+      if (count === 0) {
+        // Genuinely first run: mint File 1. This is an explicit creation, so persist the pointer.
+        const graph = { id: uid(), title: SEED_TITLE, createdAt: Date.now() };
         await db.graphs.add(graph);
+        writeSelectedId(graph.id);
       }
-      set({ graph }); // make graphId available before reloadFromDb / loadSeed
-      await get().reloadFromDb();
-      // Reconstruct today's counters from the log so caps/burying survive reloads.
-      const dayStart = startOfAnkiDay(new Date(), ROLLOVER_HOUR).getTime();
-      const todaysLogs = await db.reviewLogs.where('ts').aboveOrEqual(dayStart).toArray();
-      const newIntroducedToday = todaysLogs.filter((l) => l.wasNew).length;
-      const reviewedTodayNodeIds = new Set(todaysLogs.map((l) => l.nodeId));
-      set({ graph, loaded: true, newIntroducedToday, reviewedTodayNodeIds });
+      await get().reloadFromDb(); // resolves graphs + active graph + rows
+      const active = get().graph;
+      const counters = active
+        ? await todayCounters(active.id)
+        : { newIntroducedToday: 0, reviewedTodayNodeIds: new Set<string>() };
+      set({ loaded: true, ...counters });
     })();
     return initInFlight;
   },
 
   reloadFromDb: async () => {
-    // Always resolve to the single canonical graph (earliest createdAt) — never a
-    // sticky in-memory one. This is what makes a device converge on the real graph
-    // after a sync pull brings it down, instead of staying on a locally-forked
-    // duplicate it happened to create first. (MVP is single-graph by design.)
-    const graph = (await db.graphs.orderBy('createdAt').first()) ?? null;
+    // Resolve the active file = the user-selected pointer, else the earliest-createdAt file.
+    // Recomputed every reload (never sticky), so a sync pull that adds/removes files converges
+    // this device onto the pointed-at file — WITHOUT persisting the fallback (that write
+    // discipline is the fork-safety linchpin; see readSelectedId's note).
+    const graphs = await db.graphs.orderBy('createdAt').toArray();
+    const pointer = readSelectedId();
+    const graph = graphs.find((g) => g.id === pointer) ?? graphs[0] ?? null;
+    const prevId = get().graph?.id;
     if (!graph) {
-      set({ graph: null, nodes: [], edges: [], cards: [] });
+      set({ graphs, graph: null, nodes: [], edges: [], cards: [] });
       return;
     }
     const [nodes, edges, cards] = await Promise.all([
@@ -201,7 +256,13 @@ export const useStore = create<StoreState>((set, get) => ({
       db.edges.where('graphId').equals(graph.id).toArray(),
       db.cards.where('graphId').equals(graph.id).toArray(),
     ]);
-    set({ graph, nodes, edges, cards });
+    // If the active file changed out from under a study session (e.g. a pull deleted it),
+    // drop back to build mode so we don't review a stale/foreign queue.
+    const studyReset =
+      prevId && prevId !== graph.id
+        ? { mode: 'build' as Mode, studyQueue: [], studyIndex: 0, lastResult: null }
+        : {};
+    set({ graphs, graph, nodes, edges, cards, ...studyReset });
   },
 
   loadSeed: async () => {
@@ -234,6 +295,95 @@ export const useStore = create<StoreState>((set, get) => ({
       await db.edges.bulkAdd(edges);
     });
     await get().reloadFromDb();
+  },
+
+  createFile: async (title) => {
+    const graph: Graph = {
+      id: uid(),
+      title: title?.trim() || nextFileName(get().graphs),
+      createdAt: Date.now(),
+    };
+    await db.graphs.add(graph); // creating-hook stamps updatedAt -> syncs
+    writeSelectedId(graph.id); // explicit user action -> persist the pointer
+    set((s) => ({
+      graph,
+      graphs: [...s.graphs, graph],
+      nodes: [],
+      edges: [],
+      cards: [],
+      newIntroducedToday: 0,
+      reviewedTodayNodeIds: new Set(),
+      ...sel([], []),
+      editingNodeId: null,
+      editingEdgeId: null,
+      editSelectAll: false,
+      lastDeleted: null,
+      mode: 'build',
+      studyQueue: [],
+      studyIndex: 0,
+      lastResult: null,
+    }));
+  },
+
+  switchFile: async (id) => {
+    if (id === get().graph?.id) return;
+    writeSelectedId(id); // explicit user action -> persist
+    set({
+      ...sel([], []),
+      editingNodeId: null,
+      editingEdgeId: null,
+      editSelectAll: false,
+      lastDeleted: null,
+      mode: 'build',
+      studyQueue: [],
+      studyIndex: 0,
+      lastResult: null,
+    });
+    await get().reloadFromDb();
+    const active = get().graph;
+    if (active) set(await todayCounters(active.id));
+  },
+
+  renameFile: async (id, title) => {
+    const t = title.trim() || 'Untitled';
+    await db.graphs.update(id, { title: t }); // updating-hook stamps updatedAt -> syncs
+    set((s) => ({
+      graphs: s.graphs.map((g) => (g.id === id ? { ...g, title: t } : g)),
+      graph: s.graph?.id === id ? { ...s.graph, title: t } : s.graph,
+    }));
+  },
+
+  deleteFile: async (id) => {
+    if (get().graphs.length <= 1) return; // never delete the last file
+    // Read the file's rows from Dexie — it may not be the active (in-memory) file.
+    const [nodes, edges, cards] = await Promise.all([
+      db.nodes.where('graphId').equals(id).toArray(),
+      db.edges.where('graphId').equals(id).toArray(),
+      db.cards.where('graphId').equals(id).toArray(),
+    ]);
+    // Tombstone the graph + all its content so the delete PROPAGATES across devices
+    // (a pure-union pull never infers a delete from absence). ReviewLogs are KEPT.
+    const tombs: Tombstone[] = [
+      tomb('graphs', id),
+      ...nodes.map((n) => tomb('nodes', n.id)),
+      ...edges.map((e) => tomb('edges', e.id)),
+      ...cards.map((c) => tomb('cards', c.id)),
+    ];
+    await db.transaction('rw', db.graphs, db.nodes, db.edges, db.cards, db.tombstones, async () => {
+      await db.graphs.delete(id);
+      await db.nodes.bulkDelete(nodes.map((n) => n.id));
+      await db.edges.bulkDelete(edges.map((e) => e.id));
+      await db.cards.bulkDelete(cards.map((c) => c.id));
+      await db.tombstones.bulkPut(tombs);
+    });
+    // If the deleted file was active, point at the earliest survivor before reloading.
+    if (get().graph?.id === id) {
+      const survivor = get().graphs.find((g) => g.id !== id);
+      if (survivor) writeSelectedId(survivor.id);
+    }
+    await get().reloadFromDb();
+    const active = get().graph;
+    if (active) set(await todayCounters(active.id));
   },
 
   addNode: async (x, y) => {

@@ -90,10 +90,15 @@ async function push(wm: WM): Promise<void> {
   }
 
   // Tombstones: soft-delete rows, upserted as deleted=true with the delete time.
-  const tombs = (await db.tombstones.toArray()) as Tombstone[];
+  // Process in ascending deletedAt order and advance the watermark ONLY while every prior
+  // tombstone also succeeded — so a single failure (esp. in a bulk deleteFile) can't strand
+  // an earlier tombstone below the watermark where it would never be retried.
+  const tombs = ((await db.tombstones.toArray()) as Tombstone[])
+    .filter((t) => t.deletedAt > wm.tomb)
+    .sort((a, b) => a.deletedAt - b.deletedAt);
   let maxTomb = wm.tomb;
+  let contiguousOk = true;
   for (const ts of tombs) {
-    if (ts.deletedAt <= wm.tomb) continue;
     const cloud = cloudFor(ts.table);
     if (!cloud) continue;
     try {
@@ -101,9 +106,10 @@ async function push(wm: WM): Promise<void> {
         .from(cloud)
         .upsert({ id: ts.id, updated_at: ts.deletedAt, deleted: true, data: {} });
       if (error) throw error;
-      maxTomb = Math.max(maxTomb, ts.deletedAt);
+      if (contiguousOk) maxTomb = ts.deletedAt;
     } catch (e) {
       console.error(`[sync] push tombstone ${ts.key} failed`, e);
+      contiguousOk = false; // freeze the watermark so this (and later) tombstones retry next sync
     }
   }
   wm.tomb = maxTomb;

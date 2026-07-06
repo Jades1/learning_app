@@ -30,6 +30,7 @@ function fmtAgo(ts: number | null): string {
 export function StatsPanel({ onClose }: { onClose: () => void }) {
   const cards = useStore((s) => s.cards);
   const nodes = useStore((s) => s.nodes);
+  const graph = useStore((s) => s.graph);
   const dueCount = useStore((s) => s.dueCount);
   const newIntroducedToday = useStore((s) => s.newIntroducedToday);
 
@@ -37,9 +38,12 @@ export function StatsPanel({ onClose }: { onClose: () => void }) {
   const [storage, setStorage] = useState<{ usage: number; quota: number } | null>(null);
 
   useEffect(() => {
-    void db.reviewLogs.toArray().then(setLogs);
+    // Stats are per-file: scope the review log to the active graph (re-reads on file switch).
+    const gid = graph?.id;
+    if (gid) void db.reviewLogs.where('graphId').equals(gid).toArray().then(setLogs);
+    else setLogs([]);
     void storageEstimate().then(setStorage);
-  }, []);
+  }, [graph?.id]);
 
   const dayStart = useMemo(() => startOfAnkiDay(new Date(), ROLLOVER_HOUR).getTime(), []);
 
@@ -83,7 +87,7 @@ export function StatsPanel({ onClose }: { onClose: () => void }) {
     <div className="review-overlay" onClick={onClose}>
       <div className="stats-panel" onClick={(e) => e.stopPropagation()}>
         <div className="review-panel__head">
-          <span className="review-panel__count">Progress</span>
+          <span className="review-panel__count">Progress — {graph?.title ?? 'file'}</span>
           <button className="ghost" onClick={onClose}>
             Close
           </button>

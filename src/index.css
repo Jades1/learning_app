@@ -1123,3 +1123,116 @@ button:disabled {
   gap: 8px;
   margin-top: 4px;
 }
+
+/* ---------- file picker (multi-file switcher) ---------- */
+.filepicker {
+  position: relative;
+}
+.filepicker__current {
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  border-color: transparent;
+  background: transparent;
+  padding: 6px 8px;
+}
+.filepicker__current:hover:not(:disabled) {
+  border-color: var(--line);
+}
+.filepicker__caret {
+  color: var(--muted);
+  font-size: 11px;
+}
+.filepicker__panel {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  z-index: 30;
+  min-width: 260px;
+  max-width: 340px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+.filepicker__row {
+  border-radius: 8px;
+  padding: 2px;
+}
+.filepicker__row.active {
+  background: #f1efe9;
+}
+.filepicker__row-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.filepicker__name {
+  flex: 1;
+  text-align: left;
+  border-color: transparent;
+  background: transparent;
+  padding: 7px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filepicker__name:hover:not(:disabled) {
+  border-color: transparent;
+  background: #f6f4ef;
+}
+.filepicker__rename {
+  flex: 1;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+.filepicker__row-actions {
+  display: flex;
+  gap: 2px;
+}
+.filepicker__row-actions button {
+  border-color: transparent;
+  background: transparent;
+  padding: 5px 7px;
+  color: var(--muted);
+}
+.filepicker__row-actions button:hover:not(:disabled) {
+  border-color: var(--line);
+}
+.filepicker__confirm {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px;
+  line-height: 1.4;
+}
+.filepicker__confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+.filepicker__err {
+  font-size: 12px;
+  color: var(--due);
+  padding: 6px 8px;
+}
+.filepicker__footer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+.filepicker__footer button {
+  text-align: left;
+  border-color: transparent;
+  background: transparent;
+  font-size: 13px;
+}
+.filepicker__footer button:hover:not(:disabled) {
+  border-color: var(--line);
+}
