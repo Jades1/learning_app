@@ -54,6 +54,33 @@ const writeSelectedId = (id: string): void => {
   }
 };
 
+// The id of an auto-minted, never-used File 1 (created on first load when the DB was empty).
+// If the user later signs in on this device and a real (content-bearing) file syncs down, this
+// empty placeholder is discarded so we don't leave a duplicate empty file behind — the
+// "sign-in-after-load" fork. Cleared the moment the file gets real content (or is adopted away).
+const PROVISIONAL_KEY = 'learning_app:provisionalGraphId';
+const readProvisionalId = (): string | null => {
+  try {
+    return localStorage.getItem(PROVISIONAL_KEY);
+  } catch {
+    return null;
+  }
+};
+const writeProvisionalId = (id: string): void => {
+  try {
+    localStorage.setItem(PROVISIONAL_KEY, id);
+  } catch {
+    /* non-fatal */
+  }
+};
+const clearProvisionalId = (): void => {
+  try {
+    localStorage.removeItem(PROVISIONAL_KEY);
+  } catch {
+    /* non-fatal */
+  }
+};
+
 /** Default name for a new file: the lowest "File N" (N≥2) not already in use. File 1 keeps
  *  its own title (e.g. the seed's "Learning Claude"), so new files start numbering at 2. */
 const nextFileName = (graphs: Graph[]): string => {
@@ -154,6 +181,8 @@ interface StoreState {
   switchFile: (id: string) => Promise<void>;
   renameFile: (id: string, title: string) => Promise<void>;
   deleteFile: (id: string) => Promise<void>;
+  /** Discard an empty auto-minted File 1 if a real file has synced in. Returns true if it acted. */
+  reconcileProvisional: () => Promise<boolean>;
 
   // --- build mutations (all persist) ---
   addNode: (x: number, y: number) => Promise<string>;
@@ -223,10 +252,13 @@ export const useStore = create<StoreState>((set, get) => ({
         count = await db.graphs.count();
       }
       if (count === 0) {
-        // Genuinely first run: mint File 1. This is an explicit creation, so persist the pointer.
+        // Genuinely first run (or signed-out with an empty DB): mint File 1. Flag it PROVISIONAL
+        // so a later sign-in that pulls the user's real file can discard this empty placeholder
+        // instead of leaving a duplicate (the sign-in-after-load fork).
         const graph = { id: uid(), title: SEED_TITLE, createdAt: Date.now() };
         await db.graphs.add(graph);
         writeSelectedId(graph.id);
+        writeProvisionalId(graph.id);
       }
       await get().reloadFromDb(); // resolves graphs + active graph + rows
       const active = get().graph;
@@ -294,6 +326,7 @@ export const useStore = create<StoreState>((set, get) => ({
       await db.cards.bulkAdd(cards);
       await db.edges.bulkAdd(edges);
     });
+    clearProvisionalId(); // this file now has real content
     await get().reloadFromDb();
   },
 
@@ -386,9 +419,41 @@ export const useStore = create<StoreState>((set, get) => ({
     if (active) set(await todayCounters(active.id));
   },
 
+  reconcileProvisional: async () => {
+    const provId = readProvisionalId();
+    if (!provId) return false;
+    // If the placeholder got real content, it's a genuine file now — keep it, stop tracking.
+    if ((await db.nodes.where('graphId').equals(provId).count()) > 0) {
+      clearProvisionalId();
+      return false;
+    }
+    // Adopt only a CONTENT-BEARING alternative (guards against two empty devices tombstoning
+    // each other's placeholders into oblivion). Nothing real to adopt → keep the placeholder.
+    const graphs = await db.graphs.orderBy('createdAt').toArray();
+    let adopt: Graph | null = null;
+    for (const g of graphs) {
+      if (g.id === provId) continue;
+      if ((await db.nodes.where('graphId').equals(g.id).count()) > 0) {
+        adopt = g;
+        break;
+      }
+    }
+    if (!adopt) return false;
+    // Discard the empty placeholder (tombstone so it also leaves the cloud / other devices).
+    await db.transaction('rw', db.graphs, db.tombstones, async () => {
+      await db.graphs.delete(provId);
+      await db.tombstones.put(tomb('graphs', provId));
+    });
+    clearProvisionalId();
+    if (!readSelectedId() || readSelectedId() === provId) writeSelectedId(adopt.id);
+    return true;
+  },
+
   addNode: async (x, y) => {
     const graph = get().graph;
     if (!graph) throw new Error('No graph loaded');
+    if (readProvisionalId() === graph.id) clearProvisionalId(); // real content now
+
     const node: GNode = {
       id: uid(),
       graphId: graph.id,

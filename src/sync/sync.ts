@@ -73,10 +73,20 @@ function fromCloud(desc: Desc, row: any) {
 
 // --- push -------------------------------------------------------------------
 async function push(wm: WM): Promise<void> {
+  // Never push the empty auto-minted placeholder file (File 1 on a device that hasn't gotten
+  // real content yet) — it stays local until it earns content or is adopted away, so it can't
+  // pollute the cloud / other devices as a duplicate empty "Learning Claude".
+  let provisionalGraphId: string | null = null;
+  try {
+    provisionalGraphId = localStorage.getItem('learning_app:provisionalGraphId');
+  } catch {
+    /* ignore */
+  }
   for (const t of TABLES) {
     const rows = (await t.table().toArray()) as any[];
     let max = wm.push[t.key] ?? 0;
     for (const r of rows) {
+      if (t.key === 'graphs' && provisionalGraphId && r.id === provisionalGraphId) continue;
       if (upAt(r) <= (wm.push[t.key] ?? 0)) continue; // not dirty since last push
       try {
         const { error } = await supabase.from(t.cloud).upsert(toCloud(r));
@@ -213,7 +223,10 @@ function syncNow(): Promise<void> {
       await push(wm); // push-before-pull: protect local/offline data
       const changed = await pull(wm);
       saveWM(wm);
-      if (changed) await useStore.getState().reloadFromDb();
+      // Discard an empty auto-minted File 1 if the user's real file just synced in
+      // (prevents the sign-in-after-load duplicate).
+      const reconciled = await useStore.getState().reconcileProvisional();
+      if (changed || reconciled) await useStore.getState().reloadFromDb();
       useSyncStore.setState({ status: 'idle', lastSyncedAt: Date.now() });
     } catch (e) {
       console.error('[sync] cycle failed', e);
